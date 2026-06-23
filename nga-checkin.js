@@ -16,10 +16,11 @@ const STORE = {
 };
 
 const CONFIG = {
-  version: 'nga-loon-20260623-3',
+  version: 'nga-loon-20260623-5',
   notify: true,
   debug: true,
   logStaticAssets: false,
+  logNonStaticRequests: true,
   signKeywords: [
     'checkin',
     'check_in',
@@ -38,6 +39,7 @@ const CONFIG = {
   signActionKeywords: ['checkin', 'check_in', 'signin', 'sign_in', 'attendance', 'do_sign', 'sign=1', 'action=sign', 'act=sign'],
   statusKeywords: ['checkin', 'check_in', 'signin', 'sign_in', 'mission', 'task', 'daily', 'attendance', 'award', 'coin'],
   authCookieNames: ['ngaPassportUid', 'ngaPassportCid', 'ngaPassportUrlencodedUname', 'guestJs', 'lastvisit'],
+  authHeaderNames: ['authorization', 'x-token', 'token', 'access-token', 'x-access-token', 'x-uid', 'uid', 'user-id'],
 };
 
 function isRequestMode() {
@@ -112,6 +114,14 @@ function mergeHeaders(base, patch) {
   return headers;
 }
 
+function parseUrl(url) {
+  try {
+    return new URL(url);
+  } catch (_) {
+    return null;
+  }
+}
+
 function isStaticAsset(url) {
   const path = url.split('?')[0].toLowerCase();
   return /\.(css|js|map|png|jpe?g|gif|webp|svg|ico|ttf|otf|woff2?|eot|mp4|m4v|mov|webm|mp3|m4a|wav)$/.test(path);
@@ -125,6 +135,23 @@ function hasNGAAuthCookie(cookie) {
   // 后续签到失败时再通过日志判断是否缺少关键字段。
   const weakCookie = /(^|;\s*)(Hm_|UM_distinctid|CNZZDATA|__utm|_ga|_gid)=/i.test(cookie);
   return cookie.length > 20 && !weakCookie;
+}
+
+function pickAuthHeaders(headers) {
+  const picked = {};
+  CONFIG.authHeaderNames.forEach((name) => {
+    const key = name.toLowerCase();
+    if (headers[key]) picked[key] = headers[key];
+  });
+  if (headers.cookie && hasNGAAuthCookie(headers.cookie)) picked.cookie = headers.cookie;
+  if (headers['user-agent']) picked['user-agent'] = headers['user-agent'];
+  if (headers.accept) picked.accept = headers.accept;
+  if (headers['accept-language']) picked['accept-language'] = headers['accept-language'];
+  return picked;
+}
+
+function hasAuthSignal(headers) {
+  return Object.keys(pickAuthHeaders(headers)).some((key) => !['user-agent', 'accept', 'accept-language'].includes(key));
 }
 
 function looksLikeSignRequest(url, body) {
@@ -155,27 +182,38 @@ function capture() {
   const method = ($request.method || 'GET').toUpperCase();
   const headers = normalizeHeaders($request.headers || {});
   const body = $request.body || '';
+  const urlObj = parseUrl(url);
 
-  if (isStaticAsset(url)) {
-    if (CONFIG.debug && CONFIG.logStaticAssets) log('跳过静态资源', { method, url });
-    done();
-    return;
-  }
-
-  if (headers.cookie && hasNGAAuthCookie(headers.cookie)) {
+  const authHeaders = pickAuthHeaders(headers);
+  if (hasAuthSignal(headers)) {
     const saved = readJson(STORE.auth, {});
     const auth = {
       updatedAt: now(),
       url,
-      headers: mergeHeaders(saved.headers, {
-        cookie: headers.cookie,
-        'user-agent': headers['user-agent'],
-        accept: headers.accept,
-        'accept-language': headers['accept-language'],
-      }),
+      headers: mergeHeaders(saved.headers, authHeaders),
     };
     writeJson(STORE.auth, auth);
-    log('已保存 NGA 登录 Cookie', { url, headers: auth.headers });
+    log('已保存 NGA 登录凭据', { url, headers: auth.headers });
+    notify('NGA 捕获成功', '已保存登录凭据', urlObj ? urlObj.hostname : url);
+  }
+
+  if (isStaticAsset(url)) {
+    if (CONFIG.debug && CONFIG.logStaticAssets) log('跳过静态资源', { method, url, hasCookie: Boolean(headers.cookie) });
+    done();
+    return;
+  }
+
+  if (CONFIG.debug && CONFIG.logNonStaticRequests) {
+    log('NGA 非静态请求', {
+      method,
+      host: urlObj ? urlObj.hostname : '',
+      path: urlObj ? urlObj.pathname : url,
+      headerNames: Object.keys(headers),
+      hasCookie: Boolean(headers.cookie),
+      cookieLooksLikeNGA: hasNGAAuthCookie(headers.cookie),
+      hasAuthorization: Boolean(headers.authorization),
+      hasAuthSignal: hasAuthSignal(headers),
+    });
   }
 
   if (looksLikeStatusRequest(url, body)) {
