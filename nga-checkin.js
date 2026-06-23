@@ -16,9 +16,10 @@ const STORE = {
 };
 
 const CONFIG = {
-  version: 'nga-loon-20260623-2',
+  version: 'nga-loon-20260623-3',
   notify: true,
   debug: true,
+  logStaticAssets: false,
   signKeywords: [
     'checkin',
     'check_in',
@@ -118,7 +119,12 @@ function isStaticAsset(url) {
 
 function hasNGAAuthCookie(cookie) {
   if (!cookie) return false;
-  return CONFIG.authCookieNames.some((name) => new RegExp(`(^|;\\s*)${name}=`, 'i').test(cookie));
+  if (CONFIG.authCookieNames.some((name) => new RegExp(`(^|;\\s*)${name}=`, 'i').test(cookie))) return true;
+
+  // NGA App/WebView 有时 Cookie 名称会调整。非静态 NGA 请求中的 Cookie 先保存，
+  // 后续签到失败时再通过日志判断是否缺少关键字段。
+  const weakCookie = /(^|;\s*)(Hm_|UM_distinctid|CNZZDATA|__utm|_ga|_gid)=/i.test(cookie);
+  return cookie.length > 20 && !weakCookie;
 }
 
 function looksLikeSignRequest(url, body) {
@@ -151,7 +157,7 @@ function capture() {
   const body = $request.body || '';
 
   if (isStaticAsset(url)) {
-    if (CONFIG.debug) log('跳过静态资源', { method, url });
+    if (CONFIG.debug && CONFIG.logStaticAssets) log('跳过静态资源', { method, url });
     done();
     return;
   }
