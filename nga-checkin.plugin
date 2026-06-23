@@ -3,13 +3,9 @@
 #!author=xubeihua
 
 [Script]
-http-request ^https?:\/\/nga\.cn\/.* script-path=https://raw.githubusercontent.com/xubeihua/NGA-loon-checkin/refs/heads/main/nga-checkin.js, requires-body=true, timeout=20, tag=NGA请求捕获-cn-root
-http-request ^https?:\/\/.*\.nga\.cn\/.* script-path=https://raw.githubusercontent.com/xubeihua/NGA-loon-checkin/refs/heads/main/nga-checkin.js, requires-body=true, timeout=20, tag=NGA请求捕获-cn
-http-request ^https?:\/\/ngabbs\.com\/.* script-path=https://raw.githubusercontent.com/xubeihua/NGA-loon-checkin/refs/heads/main/nga-checkin.js, requires-body=true, timeout=20, tag=NGA请求捕获-ngabbs-root
-http-request ^https?:\/\/.*\.ngabbs\.com\/.* script-path=https://raw.githubusercontent.com/xubeihua/NGA-loon-checkin/refs/heads/main/nga-checkin.js, requires-body=true, timeout=20, tag=NGA请求捕获-ngabbs
-http-request ^https?:\/\/nga\.178\.com\/.* script-path=https://raw.githubusercontent.com/xubeihua/NGA-loon-checkin/refs/heads/main/nga-checkin.js, requires-body=true, timeout=20, tag=NGA请求捕获-178-root
-http-request ^https?:\/\/bbs\.nga\.178\.com\/.* script-path=https://raw.githubusercontent.com/xubeihua/NGA-loon-checkin/refs/heads/main/nga-checkin.js, requires-body=true, timeout=20, tag=NGA请求捕获-bbs178
-cron "8 9 * * *" script-path=https://raw.githubusercontent.com/xubeihua/NGA-loon-checkin/refs/heads/main/nga-checkin.js, timeout=30, tag=NGA自动签到
+http-request ^https?:\/\/(bbs\.nga\.cn|nga\.cn|ngabbs\.com|nga\.178\.com)\/ script-path=https://raw.githubusercontent.com/xubeihua/NGA-loon-checkin/refs/heads/main/nga-checkin.js, requires-body=false, timeout=10, tag=NGA获取Cookie, enable=true
+
+cron "10 9 * * *" script-path=https://raw.githubusercontent.com/xubeihua/NGA-loon-checkin/refs/heads/main/nga-checkin.js, timeout=60, tag=NGA多账号签到, enable=true
 
 [MITM]
 hostname = %APPEND% *.nga.cn, *.ngabbs.com, nga.178.com, bbs.nga.cn, app.nga.cn
