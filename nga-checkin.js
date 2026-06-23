@@ -11,11 +11,12 @@
 const STORE = {
   auth: 'nga.checkin.auth.v1',
   signReq: 'nga.checkin.request.v1',
+  statusReq: 'nga.checkin.status.request.v1',
   lastDebug: 'nga.checkin.debug.v1',
 };
 
 const CONFIG = {
-  version: 'nga-loon-20260623-1',
+  version: 'nga-loon-20260623-2',
   notify: true,
   debug: true,
   signKeywords: [
@@ -33,6 +34,8 @@ const CONFIG = {
     'award',
     'coin',
   ],
+  signActionKeywords: ['checkin', 'check_in', 'signin', 'sign_in', 'attendance', 'do_sign', 'sign=1', 'action=sign', 'act=sign'],
+  statusKeywords: ['checkin', 'check_in', 'signin', 'sign_in', 'mission', 'task', 'daily', 'attendance', 'award', 'coin'],
   authCookieNames: ['ngaPassportUid', 'ngaPassportCid', 'ngaPassportUrlencodedUname', 'guestJs', 'lastvisit'],
 };
 
@@ -123,6 +126,16 @@ function looksLikeSignRequest(url, body) {
   return CONFIG.signKeywords.some((word) => text.includes(word));
 }
 
+function looksLikeSignAction(url, body) {
+  const text = `${decodeURIComponentSafe(url)}\n${decodeURIComponentSafe(body || '')}`.toLowerCase();
+  return CONFIG.signActionKeywords.some((word) => text.includes(word));
+}
+
+function looksLikeStatusRequest(url, body) {
+  const text = `${decodeURIComponentSafe(url)}\n${decodeURIComponentSafe(body || '')}`.toLowerCase();
+  return CONFIG.statusKeywords.some((word) => text.includes(word));
+}
+
 function decodeURIComponentSafe(value) {
   try {
     return decodeURIComponent(String(value || ''));
@@ -159,7 +172,19 @@ function capture() {
     log('已保存 NGA 登录 Cookie', { url, headers: auth.headers });
   }
 
-  if (looksLikeSignRequest(url, body)) {
+  if (looksLikeStatusRequest(url, body)) {
+    const statusReq = {
+      updatedAt: now(),
+      url,
+      method,
+      headers: mergeHeaders(headers, {}),
+      body,
+    };
+    writeJson(STORE.statusReq, statusReq);
+    log('已保存疑似签到状态请求', statusReq);
+  }
+
+  if (looksLikeSignRequest(url, body) && looksLikeSignAction(url, body)) {
     const signReq = {
       updatedAt: now(),
       url,
@@ -168,8 +193,8 @@ function capture() {
       body,
     };
     writeJson(STORE.signReq, signReq);
-    notify('NGA 捕获成功', '已保存疑似签到请求', `${method} ${url}`);
-    log('已保存疑似签到请求', signReq);
+    notify('NGA 捕获成功', '已保存签到请求', `${method} ${url}`);
+    log('已保存签到请求', signReq);
   } else {
     log('捕获到 NGA 请求，但不像签到接口', { method, url, hasCookie: Boolean(headers.cookie) });
   }
@@ -207,24 +232,68 @@ function parseResult(status, body) {
   const source = json ? safeJson(json) : text.replace(/\s+/g, ' ');
   const already = /已签到|已经签到|今日.*签|重复签到|signed|checked/i.test(source);
   const success = /签到成功|成功|success|ok/i.test(source);
+  const notSigned = /未签到|没有签到|尚未签到|not.?sign|unsigned|unchecked/i.test(source);
   const daysMatch =
     source.match(/连续[^0-9]{0,8}([0-9]+)[^0-9]{0,4}天/) ||
     source.match(/累计[^0-9]{0,8}([0-9]+)[^0-9]{0,4}天/) ||
     source.match(/check.?in.?days["':：\s]+([0-9]+)/i) ||
     source.match(/continuous.?days["':：\s]+([0-9]+)/i);
+  const extracted = json ? extractStatsFromObject(json) : {};
 
   return {
     status,
-    already,
+    already: already || extracted.checkedIn === true,
+    notSigned: notSigned || extracted.checkedIn === false,
     success,
-    days: daysMatch ? daysMatch[1] : '',
+    days: extracted.continuousDays || extracted.accumulateDays || (daysMatch ? daysMatch[1] : ''),
+    continuousDays: extracted.continuousDays || '',
+    accumulateDays: extracted.accumulateDays || '',
     summary: source.slice(0, 180),
   };
+}
+
+function extractStatsFromObject(value) {
+  const result = {
+    checkedIn: undefined,
+    continuousDays: '',
+    accumulateDays: '',
+  };
+  walk(value);
+  return result;
+
+  function walk(node) {
+    if (!node || typeof node !== 'object') return;
+    Object.keys(node).forEach((key) => {
+      const lower = key.toLowerCase();
+      const val = node[key];
+
+      if (typeof val === 'boolean' && /(checked|checkin|signin|signed|today).*(_?in)?$/.test(lower)) {
+        result.checkedIn = val;
+      }
+      if ((typeof val === 'number' || typeof val === 'string') && !result.continuousDays && /(continuous|consecutive|streak|连续).*day|days|天/.test(lower)) {
+        result.continuousDays = String(val);
+      }
+      if ((typeof val === 'number' || typeof val === 'string') && !result.accumulateDays && /(accumulate|total|sum|累计).*day|days|天/.test(lower)) {
+        result.accumulateDays = String(val);
+      }
+      if (val && typeof val === 'object') walk(val);
+    });
+  }
+}
+
+function formatCheckinNotice(result) {
+  const lines = [];
+  if (result.continuousDays) lines.push(`连续签到：${result.continuousDays} 天`);
+  if (result.accumulateDays) lines.push(`累计签到：${result.accumulateDays} 天`);
+  if (!lines.length && result.days) lines.push(`签到天数：${result.days} 天`);
+  lines.push(result.summary);
+  return lines.join('\n');
 }
 
 function runCheckin() {
   log(`NGA 自动签到启动，版本 ${CONFIG.version}`);
   const signReq = readJson(STORE.signReq, null);
+  const statusReq = readJson(STORE.statusReq, null);
   const auth = readJson(STORE.auth, null);
 
   if (!auth || !auth.headers || !auth.headers.cookie) {
@@ -234,13 +303,57 @@ function runCheckin() {
     return;
   }
 
+  if (statusReq) {
+    checkStatusThenSign(statusReq, signReq, auth);
+    return;
+  }
+
   if (!signReq) {
-    notify('NGA 签到未配置', '缺少签到请求', '首次需要在 NGA App 手动签到一次用于捕获接口');
-    log('缺少签到请求');
+    notify('NGA 签到未配置', '缺少状态/签到请求', '请打开 NGA App 签到页刷新；未签到时再手动签到一次捕获接口');
+    log('缺少状态/签到请求');
     done();
     return;
   }
 
+  performSign(signReq, auth);
+}
+
+function checkStatusThenSign(statusReq, signReq, auth) {
+  const request = buildRequest(statusReq, auth);
+  log('先检查签到状态', request);
+
+  sendRequest(request, (error, response, body) => {
+    if (error) {
+      log('状态检查失败，尝试直接签到', String(error));
+      if (signReq) {
+        performSign(signReq, auth);
+      } else {
+        notify('NGA 签到失败', '状态检查失败且无签到请求', String(error));
+        done();
+      }
+      return;
+    }
+
+    const statusResult = parseResult(response && response.status, body);
+    log('状态响应', statusResult);
+
+    if (statusResult.already) {
+      notify('NGA 签到', '今日已签到', formatCheckinNotice(statusResult));
+      done();
+      return;
+    }
+
+    if (!signReq) {
+      notify('NGA 签到未配置', '今天似乎未签到，但缺少签到请求', '请在未签到状态下手动签到一次，让脚本捕获真正签到接口');
+      done();
+      return;
+    }
+
+    performSign(signReq, auth);
+  });
+}
+
+function performSign(signReq, auth) {
   const request = buildRequest(signReq, auth);
   log('开始签到请求', request);
 
@@ -257,9 +370,9 @@ function runCheckin() {
     log('签到响应', result);
 
     if (result.already) {
-      notify('NGA 签到', '今日已签到', result.days ? `连续/累计签到约 ${result.days} 天\n${result.summary}` : result.summary);
+      notify('NGA 签到', '今日已签到', formatCheckinNotice(result));
     } else if (result.success || status === 200) {
-      notify('NGA 签到', '签到请求完成', result.days ? `签到天数：${result.days} 天\n${result.summary}` : result.summary);
+      notify('NGA 签到', '签到请求完成', formatCheckinNotice(result));
     } else {
       notify('NGA 签到失败', `HTTP ${status || 'unknown'}`, result.summary);
     }
