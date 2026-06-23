@@ -1,0 +1,10 @@
+#!name=NGA 自动签到调试版
+#!desc=捕获 NGA App/WebView 的登录 Cookie 和签到请求，定时自动重放签到，并输出调试日志。
+#!author=xubeihua
+
+[Script]
+http-request ^https?:\/\/([^\/]+\.)?(nga\.cn|ngabbs\.com|178\.com)\/.* script-path=./nga-checkin.js, requires-body=true, timeout=20, tag=NGA请求捕获
+cron "8 9 * * *" script-path=./nga-checkin.js, timeout=30, tag=NGA自动签到
+
+[MITM]
+hostname = %APPEND% *.nga.cn, *.ngabbs.com, nga.178.com, bbs.nga.cn, app.nga.cn
